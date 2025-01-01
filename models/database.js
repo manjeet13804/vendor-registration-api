@@ -1,9 +1,14 @@
 const { Sequelize } = require('sequelize');
 const config = require('../config/config');
 
-const sequelize = new Sequelize(config.database.name, config.database.username, config.database.password, {
-  host: config.database.host,
-  dialect: 'mysql',
+const sequelize = new Sequelize(config.database.url, {
+  dialect: 'postgres',
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false
+    }
+  },
   logging: console.log,
   pool: {
     max: 5,
@@ -12,8 +17,6 @@ const sequelize = new Sequelize(config.database.name, config.database.username, 
     idle: 10000
   },
   define: {
-    charset: 'utf8mb4',
-    collate: 'utf8mb4_unicode_ci',
     timestamps: true,
     underscored: true
   }
