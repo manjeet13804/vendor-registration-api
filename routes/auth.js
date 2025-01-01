@@ -1,30 +1,73 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/user');
-const OTP = require('../models/otp'); // Assuming OTP model is defined in '../models/otp.js'
+const OTP = require('../models/otp');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const { Op } = require('sequelize'); // Import Op from sequelize
+const { Op } = require('sequelize');
+const smsService = require('../services/smsService');
+const config = require('../config/config');
+const { validateRegistration, validateLogin } = require('../middleware/validators');
+const { authenticateToken } = require('../middleware/auth');
 
 // Register
-router.post('/register', async (req, res) => {
-  const { username, password } = req.body;
+router.post('/register', validateRegistration, async (req, res) => {
+  const { name, email, password, mobileNumber, referenceCode } = req.body;
 
   try {
+    // Check if user already exists
+    const existingUser = await User.findOne({
+      where: {
+        [Op.or]: [{ email }, { mobileNumber }]
+      }
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        error: 'User already exists with this email or mobile number'
+      });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({ username, password: hashedPassword });
-    res.status(201).json(user);
-  } catch (err) {
-    res.status(500).json({ error: 'Server error' });
+    const user = await User.create({
+      name,
+      email,
+      password: hashedPassword,
+      mobileNumber,
+      referenceCode,
+      status: 'pending_verification'
+    });
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      config.jwtSecret,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      message: 'Registration successful',
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        mobileNumber: user.mobileNumber,
+        status: user.status
+      }
+    });
+  } catch (error) {
+    console.error('Registration Error:', error);
+    res.status(500).json({ error: 'Failed to register user' });
   }
 });
 
 // Login
-router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
+router.post('/login', validateLogin, async (req, res) => {
+  const { email, password } = req.body;
 
   try {
-    const user = await User.findOne({ where: { username } });
+    const user = await User.findOne({ where: { email } });
     if (!user) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
@@ -34,9 +77,32 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    const token = jwt.sign({ userId: user.id }, 'vendor');
-    res.json({ token });
-  } catch (err) {
+    // Check if user is verified
+    if (user.status !== 'active') {
+      return res.status(403).json({
+        error: 'Account not verified',
+        status: user.status
+      });
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      config.jwtSecret,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        mobileNumber: user.mobileNumber,
+        status: user.status
+      }
+    });
+  } catch (error) {
+    console.error('Login Error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -46,20 +112,35 @@ router.post('/send-otp', async (req, res) => {
   const { mobileNumber } = req.body;
 
   try {
-    // Generate a 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    // Store OTP in database with expiry (15 minutes)
-    await OTP.create({
-      mobileNumber,
-      otp,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes from now
+    // Check if we've sent too many OTPs recently
+    const recentOTPs = await OTP.count({
+      where: {
+        mobileNumber,
+        createdAt: {
+          [Op.gt]: new Date(Date.now() - 60 * 60 * 1000) // Last hour
+        }
+      }
     });
 
-    // In production, integrate with SMS service provider
-    // For development, just return success
+    if (recentOTPs >= 5) {
+      return res.status(429).json({
+        error: 'Too many OTP requests. Please try again later.'
+      });
+    }
+
+    // Send OTP via SMS service
+    const { otp } = await smsService.sendOTP(mobileNumber);
+    
+    // Store OTP in database
+    await OTP.create({
+      mobileNumber,
+      otp: await bcrypt.hash(otp.toString(), 10), // Hash OTP before storing
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+    });
+
     res.json({ message: 'OTP sent successfully' });
-  } catch (err) {
+  } catch (error) {
+    console.error('Send OTP Error:', error);
     res.status(500).json({ error: 'Failed to send OTP' });
   }
 });
@@ -72,23 +153,85 @@ router.post('/verify-otp', async (req, res) => {
     const otpRecord = await OTP.findOne({
       where: {
         mobileNumber,
-        otp,
         expiresAt: {
-          [Op.gt]: new Date() // Not expired
+          [Op.gt]: new Date()
         }
-      }
+      },
+      order: [['createdAt', 'DESC']]
     });
 
     if (!otpRecord) {
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
+      return res.status(400).json({ error: 'OTP expired. Please request a new one.' });
     }
 
-    // Delete the OTP record
-    await otpRecord.destroy();
+    const isValidOTP = await bcrypt.compare(otp.toString(), otpRecord.otp);
+    if (!isValidOTP) {
+      return res.status(400).json({ error: 'Invalid OTP' });
+    }
+
+    // Delete all OTPs for this number
+    await OTP.destroy({
+      where: { mobileNumber }
+    });
+
+    // Update user status if exists
+    await User.update(
+      { status: 'active' },
+      { where: { mobileNumber } }
+    );
 
     res.json({ message: 'OTP verified successfully' });
-  } catch (err) {
+  } catch (error) {
+    console.error('Verify OTP Error:', error);
     res.status(500).json({ error: 'Failed to verify OTP' });
+  }
+});
+
+// Get User Profile
+router.get('/profile', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.userId, {
+      attributes: { exclude: ['password'] }
+    });
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user });
+  } catch (error) {
+    console.error('Profile Error:', error);
+    res.status(500).json({ error: 'Failed to fetch profile' });
+  }
+});
+
+// Update Profile
+router.put('/profile', authenticateToken, async (req, res) => {
+  const { name, email } = req.body;
+
+  try {
+    const user = await User.findByPk(req.user.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    user.name = name || user.name;
+    user.email = email || user.email;
+    await user.save();
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        mobileNumber: user.mobileNumber,
+        status: user.status
+      }
+    });
+  } catch (error) {
+    console.error('Update Profile Error:', error);
+    res.status(500).json({ error: 'Failed to update profile' });
   }
 });
 
