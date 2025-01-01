@@ -19,12 +19,10 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET || 'your-secret-key',
   jwtExpiresIn: '7d',
   
-  // SMS Gateway Configuration (using MSG91 as an example)
+  // SMS Gateway Configuration (MSG91)
   sms: {
     apiKey: process.env.MSG91_API_KEY,
-    senderId: process.env.MSG91_SENDER_ID || 'INDZNA',
-    route: '4', // Transactional route
-    baseUrl: 'https://api.msg91.com/api/v5',
+    senderId: process.env.MSG91_SENDER_ID,
     templates: {
       registration: process.env.MSG91_REGISTRATION_TEMPLATE,
       login: process.env.MSG91_LOGIN_TEMPLATE,

@@ -12,13 +12,13 @@ const { authenticateToken } = require('../middleware/auth');
 
 // Register
 router.post('/register', validateRegistration, async (req, res) => {
-  const { name, email, password, mobileNumber, referenceCode } = req.body;
+  const { name, email, password, mobileNumber: mobile_number, referenceCode } = req.body;
 
   try {
     // Check if user already exists
     const existingUser = await User.findOne({
       where: {
-        [Op.or]: [{ email }, { mobileNumber }]
+        [Op.or]: [{ email }, { mobile_number }]
       }
     });
 
@@ -33,7 +33,7 @@ router.post('/register', validateRegistration, async (req, res) => {
       name,
       email,
       password: hashedPassword,
-      mobileNumber,
+      mobile_number,
       referenceCode,
       status: 'pending_verification'
     });
@@ -52,7 +52,7 @@ router.post('/register', validateRegistration, async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        mobileNumber: user.mobileNumber,
+        mobile_number: user.mobile_number,
         status: user.status
       }
     });
@@ -97,7 +97,7 @@ router.post('/login', validateLogin, async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        mobileNumber: user.mobileNumber,
+        mobile_number: user.mobile_number,
         status: user.status
       }
     });
@@ -109,14 +109,14 @@ router.post('/login', validateLogin, async (req, res) => {
 
 // Send OTP
 router.post('/send-otp', async (req, res) => {
-  const { mobileNumber } = req.body;
+  const { mobileNumber: mobile_number } = req.body;
 
   try {
     // Check if we've sent too many OTPs recently
     const recentOTPs = await OTP.count({
       where: {
-        mobileNumber,
-        createdAt: {
+        mobile_number,
+        created_at: {
           [Op.gt]: new Date(Date.now() - 60 * 60 * 1000) // Last hour
         }
       }
@@ -129,13 +129,13 @@ router.post('/send-otp', async (req, res) => {
     }
 
     // Send OTP via SMS service
-    const { otp } = await smsService.sendOTP(mobileNumber);
+    const { otp } = await smsService.sendOTP(mobile_number);
     
     // Store OTP in database
     await OTP.create({
-      mobileNumber,
+      mobile_number,
       otp: await bcrypt.hash(otp.toString(), 10), // Hash OTP before storing
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+      expires_at: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
     });
 
     res.json({ message: 'OTP sent successfully' });
@@ -147,17 +147,17 @@ router.post('/send-otp', async (req, res) => {
 
 // Verify OTP
 router.post('/verify-otp', async (req, res) => {
-  const { mobileNumber, otp } = req.body;
+  const { mobileNumber: mobile_number, otp } = req.body;
 
   try {
     const otpRecord = await OTP.findOne({
       where: {
-        mobileNumber,
-        expiresAt: {
+        mobile_number,
+        expires_at: {
           [Op.gt]: new Date()
         }
       },
-      order: [['createdAt', 'DESC']]
+      order: [['created_at', 'DESC']]
     });
 
     if (!otpRecord) {
@@ -171,13 +171,13 @@ router.post('/verify-otp', async (req, res) => {
 
     // Delete all OTPs for this number
     await OTP.destroy({
-      where: { mobileNumber }
+      where: { mobile_number }
     });
 
     // Update user status if exists
     await User.update(
       { status: 'active' },
-      { where: { mobileNumber } }
+      { where: { mobile_number } }
     );
 
     res.json({ message: 'OTP verified successfully' });
@@ -225,7 +225,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        mobileNumber: user.mobileNumber,
+        mobile_number: user.mobile_number,
         status: user.status
       }
     });

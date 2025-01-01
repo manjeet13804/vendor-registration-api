@@ -15,10 +15,25 @@ const Vendor = sequelize.define('vendors', {
     type: DataTypes.STRING,
     allowNull: false
   },
-  mobileNumber: {
+  mobile_number: {
     type: DataTypes.STRING,
-    allowNull: false
+    allowNull: false,
+    unique: true,
+    validate: {
+      is: /^\+91[0-9]{10}$/
+    }
+  },
+  status: {
+    type: DataTypes.ENUM('pending_verification', 'active', 'suspended'),
+    defaultValue: 'pending_verification'
+  },
+  reference_code: {
+    type: DataTypes.STRING,
+    allowNull: true
   }
+}, {
+  underscored: true,
+  timestamps: true
 });
 
 module.exports = Vendor;
